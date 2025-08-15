@@ -1,5 +1,16 @@
 // 文件路径: /api/proxy.js
 export default async function handler(request, response) {
+  // 设置 CORS 头
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-goog-api-key');
+  
+  // 处理 OPTIONS 预检请求
+  if (request.method === 'OPTIONS') {
+    response.status(200).end();
+    return;
+  }
+
   // 检查请求方法是否为 POST
   if (request.method !== 'POST') {
     response.status(405).json({ error: 'Method Not Allowed' });
