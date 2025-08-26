@@ -1,6 +1,5 @@
-// 文件路径: /api/proxy.js (修正了 .clone() 错误的最终版)
+// 文件路径: /api/proxy.js (修正了 Gemini stream body 问题的最终版)
 
-// 辅助函数，用于将数据流从源API传输到客户端
 async function streamResponse(apiResponse, clientResponse) {
   clientResponse.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   clientResponse.setHeader('Cache-Control', 'no-cache');
@@ -18,8 +17,6 @@ async function streamResponse(apiResponse, clientResponse) {
 }
 
 export default async function handler(request, response) {
-  // Vercel 已经为我们处理好了请求体，可以直接从 request.body 获取
-  // 我们不再需要 request.clone() 或手动解析 JSON
   const body = request.body;
   const { searchParams } = new URL(request.url, `http://${request.headers.host}`);
   const provider = searchParams.get('provider') || 'gemini';
@@ -82,9 +79,16 @@ export default async function handler(request, response) {
   // --- Google (Gemini) 路由 ---
   if (provider.toLowerCase() === 'gemini') {
     if (!path) return response.status(400).json({ error: "Missing 'path' parameter" });
+
+    // 复制请求体，以便我们可以安全地修改它
+    const geminiBody = { ...body };
+    
+    // 如果是流式请求，修改URL并从请求体中删除stream字段
     if (isStreaming) {
       path = path.replace(':generateContent', ':streamGenerateContent');
+      delete geminiBody.stream; // <-- 这是关键的修正！
     }
+
     const geminiApiUrl = `https://generativelanguage.googleapis.com/${path}`;
     try {
       const geminiResponse = await fetch(geminiApiUrl, {
@@ -93,7 +97,8 @@ export default async function handler(request, response) {
           'Content-Type': 'application/json',
           'x-goog-api-key': process.env.GEMINI_API_KEY
         },
-        body: JSON.stringify(body)
+        // 使用我们处理过的、不含stream字段的请求体
+        body: JSON.stringify(geminiBody)
       });
       
       return streamResponse(geminiResponse, response);
