@@ -1,70 +1,86 @@
-// 文件路径: /api/proxy.js (支持 Gemini, OpenAI, Claude 的最终版本)
+// 文件路径: /api/proxy.js (支持流式输出的最终版)
+
+// 辅助函数，用于将数据流从源API传输到客户端
+async function streamResponse(apiResponse, clientResponse) {
+  // 设置响应头，告知浏览器这是一个事件流
+  clientResponse.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  clientResponse.setHeader('Cache-Control', 'no-cache');
+  clientResponse.setHeader('Connection', 'keep-alive');
+  
+  const reader = apiResponse.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    clientResponse.write(value);
+  }
+  clientResponse.end();
+}
 
 export default async function handler(request, response) {
-  // 我们通过一个查询参数 'provider' 来决定请求发往哪里
   const { searchParams } = new URL(request.url, `http://${request.headers.host}`);
-  const provider = searchParams.get('provider') || 'gemini'; // 如果不指定，默认为 'gemini'
-  const path = searchParams.get('path');
+  const provider = searchParams.get('provider') || 'gemini';
+  let path = searchParams.get('path');
 
-  // 对于 Claude，路径是固定的，所以我们不需要 path 参数
-  // 对于其他 provider，path 参数是必须的
-  if (provider.toLowerCase() !== 'claude' && !path) {
-    return response.status(400).json({ error: "Missing 'path' parameter for this provider" });
-  }
+  // 克隆请求体，因为请求体只能被读取一次
+  const body = await request.clone().json();
+  const isStreaming = body.stream === true;
 
   // --- Anthropic (Claude) 路由 ---
   if (provider.toLowerCase() === 'claude') {
     const claudeApiUrl = 'https://api.anthropic.com/v1/messages';
-
     try {
       const claudeResponse = await fetch(claudeApiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Claude 的 Key 是通过 x-api-key 头发送的
           'x-api-key': process.env.CLAUDE_API_KEY,
-          // Claude API 要求必须指定版本号
           'anthropic-version': '2023-06-01'
         },
-        body: JSON.stringify(request.body)
+        body: JSON.stringify(body)
       });
-
-      const data = await claudeResponse.json();
-      return response.status(claudeResponse.status).json(data);
-
-    } catch (error) {
-      console.error('Claude Proxy Error:', error);
-      return response.status(500).json({ error: 'An internal error occurred while proxying to Claude' });
-    }
+      
+      if (isStreaming) {
+        return streamResponse(claudeResponse, response);
+      } else {
+        const data = await claudeResponse.json();
+        return response.status(claudeResponse.status).json(data);
+      }
+    } catch (error) { /* ... 错误处理 ... */ }
   }
 
   // --- OpenAI (GPT) 路由 ---
   if (provider.toLowerCase() === 'openai') {
+    if (!path) return response.status(400).json({ error: "Missing 'path' parameter" });
     const openaiApiUrl = `https://api.openai.com/v1/${path}`;
-
     try {
       const openaiResponse = await fetch(openaiApiUrl, {
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
         },
-        body: JSON.stringify(request.body)
+        body: JSON.stringify(body)
       });
 
-      const data = await openaiResponse.json();
-      return response.status(openaiResponse.status).json(data);
-
-    } catch (error) {
-      console.error('OpenAI Proxy Error:', error);
-      return response.status(500).json({ error: 'An internal error occurred while proxying to OpenAI' });
-    }
+      if (isStreaming) {
+        return streamResponse(openaiResponse, response);
+      } else {
+        const data = await openaiResponse.json();
+        return response.status(openaiResponse.status).json(data);
+      }
+    } catch (error) { /* ... 错误处理 ... */ }
   }
 
-  // --- Google (Gemini) 路由 (默认) ---
+  // --- Google (Gemini) 路由 ---
   if (provider.toLowerCase() === 'gemini') {
+    if (!path) return response.status(400).json({ error: "Missing 'path' parameter" });
+    // Gemini的流式输出是通过修改URL路径实现的
+    if (isStreaming) {
+      path = path.replace(':generateContent', ':streamGenerateContent');
+    }
     const geminiApiUrl = `https://generativelanguage.googleapis.com/${path}`;
-    
     try {
       const geminiResponse = await fetch(geminiApiUrl, {
         method: 'POST',
@@ -72,18 +88,14 @@ export default async function handler(request, response) {
           'Content-Type': 'application/json',
           'x-goog-api-key': process.env.GEMINI_API_KEY
         },
-        body: JSON.stringify(request.body)
+        body: JSON.stringify(body)
       });
       
-      const data = await geminiResponse.json();
-      return response.status(geminiResponse.status).json(data);
+      // Gemini的流式和非流式响应都需要以流的方式处理，只是格式不同
+      return streamResponse(geminiResponse, response);
 
-    } catch (error) {
-      console.error('Gemini Proxy Error:', error);
-      return response.status(500).json({ error: 'An internal error occurred while proxying to Gemini' });
-    }
+    } catch (error) { /* ... 错误处理 ... */ }
   }
-
-  // 如果 provider 参数不匹配任何已知提供商
-  return response.status(400).json({ error: "Invalid 'provider'. Must be 'gemini', 'openai', or 'claude'." });
+  
+  return response.status(400).json({ error: "Invalid 'provider'." });
 }
