@@ -50,32 +50,29 @@ export default async function handler(request, response) {
     }
   }
 
-  // --- OpenAI (GPT) 路由 ---
+   // --- OpenAI (GPT) 路由 ---
   if (provider.toLowerCase() === 'openai') {
     if (!path) return response.status(400).json({ error: "Missing 'path' parameter" });
     const openaiApiUrl = `https://api.openai.com/v1/${path}`;
     try {
+      
+      const headers = {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      };
+
+      // **** 添加下面这行调试代码 ****
+      console.log("Using OpenAI Key:", process.env.OPENAI_API_KEY); 
+      // **************************
+
       const openaiResponse = await fetch(openaiApiUrl, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+        headers: headers, // 使用我们上面定义的 headers
         body: JSON.stringify(body)
       });
 
-      if (isStreaming) {
-        return streamResponse(openaiResponse, response);
-      } else {
-        const data = await openaiResponse.json();
-        return response.status(openaiResponse.status).json(data);
-      }
-    } catch (error) {
-        console.error('OpenAI Proxy Error:', error);
-        return response.status(500).json({ error: 'An internal error occurred while proxying to OpenAI' });
-    }
-  }
 
+      
   // --- Google (Gemini) 路由 ---
   if (provider.toLowerCase() === 'gemini') {
     if (!path) return response.status(400).json({ error: "Missing 'path' parameter" });
